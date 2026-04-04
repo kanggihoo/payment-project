@@ -2,19 +2,6 @@
 
 > **목표:** `@Transactional` 안에서 외부 PG API를 호출했을 때 발생하는 두 가지 참사를 TDD로 먼저 증명하고, 그 테스트를 통과시키는 최소한의 구현을 작성한다.
 
----
-
-## 확정된 선택사항
-
-| 항목 | 결정 |
-|------|------|
-| Session/Redis 의존성 | 제거 (Phase 1 불필요) |
-| WireMock | `org.wiremock:wiremock:3.12.1` (standalone) |
-| DataInconsistency 테스트 방식 | **두 가지** 모두 구현 |
-| 테스트 방식 | **TDD** — 테스트 먼저 작성 → Red → 구현 → Green |
-
----
-
 ## TDD 사이클 개요
 
 ```
@@ -33,16 +20,8 @@ Phase 1은 "나이브한 구현의 문제를 증명"이 목적이므로,
 
 ## Step 1: build.gradle 수정
 
-**파일:** `payment/build.gradle`
-
-**제거:**
-```groovy
-implementation 'org.springframework.boot:spring-boot-starter-session-jdbc'
-testImplementation 'org.springframework.boot:spring-boot-starter-session-data-redis-test'
-testImplementation 'org.springframework.boot:spring-boot-starter-session-jdbc-test'
-```
-
 **추가:**
+
 ```groovy
 implementation 'org.springframework.boot:spring-boot-starter-actuator'
 runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
@@ -56,6 +35,7 @@ testImplementation 'org.wiremock:wiremock:3.12.1'
 **파일:** `payment/src/test/java/com/example/payment/TestcontainersConfiguration.java`
 
 변경 내용:
+
 - Redis `GenericContainer` bean 제거
 - PostgreSQL 이미지 `postgres:latest` → `postgres:17-alpine`
 - `.withInitScript("init/01_schema.sql")` 추가 (`ddl-auto: validate` 대응)
@@ -66,16 +46,16 @@ testImplementation 'org.wiremock:wiremock:3.12.1'
 
 모두 프로젝트 루트(`/Users/kkh/Desktop/payment-project/`)에 생성.
 
-| 파일 | 내용 |
-|------|------|
-| `docker-compose.app.yml` | PostgreSQL 17-alpine + postgres-exporter(9187) + WireMock(8089) |
-| `docker-compose.monitoring.yml` | Prometheus + Grafana + k6 (`profiles: [k6]`) |
-| `prometheus.yml` | scrape: Spring(8080/actuator/prometheus) + postgres-exporter(9187), interval: 5s |
-| `wiremock/mappings/pg-approve-success.json` | POST `/v1/payments/confirm` → 200 정상 응답 |
-| `wiremock/mappings/pg-approve-slow.json` | 동일 응답 + `fixedDelayMilliseconds: 10000` |
-| `postgres/init/01_schema.sql` | orders + payment 테이블 DDL + 시드 데이터(ORD-001) |
-| `scripts/phase1-baseline.js` | k6: 50 VUs, 30s, 정상 PG |
-| `scripts/phase1-slow-pg.js` | k6: 50 VUs, 60s, timeout 35s, 느린 PG |
+| 파일                                        | 내용                                                                             |
+| ------------------------------------------- | -------------------------------------------------------------------------------- |
+| `docker-compose.app.yml`                    | PostgreSQL 17-alpine + postgres-exporter(9187) + WireMock(8089)                  |
+| `docker-compose.monitoring.yml`             | Prometheus + Grafana + k6 (`profiles: [k6]`)                                     |
+| `prometheus.yml`                            | scrape: Spring(8080/actuator/prometheus) + postgres-exporter(9187), interval: 5s |
+| `wiremock/mappings/pg-approve-success.json` | POST `/v1/payments/confirm` → 200 정상 응답                                      |
+| `wiremock/mappings/pg-approve-slow.json`    | 동일 응답 + `fixedDelayMilliseconds: 10000`                                      |
+| `postgres/init/01_schema.sql`               | orders + payment 테이블 DDL + 시드 데이터(ORD-001)                               |
+| `scripts/phase1-baseline.js`                | k6: 50 VUs, 30s, 정상 PG                                                         |
+| `scripts/phase1-slow-pg.js`                 | k6: 50 VUs, 60s, timeout 35s, 느린 PG                                            |
 
 > **주의:** Prometheus 컨테이너 command에 `--web.enable-remote-write-receiver` 추가 필요 (k6 metrics 수신용)
 
@@ -201,39 +181,44 @@ management:
 생성 순서 (의존 방향 순):
 
 ### Domain
-| 파일 | 내용 |
-|------|------|
-| `domain/OrderStatus.java` | `enum OrderStatus { READY, SUCCESS, FAILED }` |
-| `domain/PaymentStatus.java` | `enum PaymentStatus { READY, SUCCESS, FAILED }` |
-| `domain/Order.java` | `@Entity @Table(name="orders")` — Lombok @Getter @Setter @NoArgsConstructor |
-| `domain/Payment.java` | `@Entity @Table(name="payment")` — orderId는 plain `Long` (naive, FK 관계 없음) |
+
+| 파일                        | 내용                                                                            |
+| --------------------------- | ------------------------------------------------------------------------------- |
+| `domain/OrderStatus.java`   | `enum OrderStatus { READY, SUCCESS, FAILED }`                                   |
+| `domain/PaymentStatus.java` | `enum PaymentStatus { READY, SUCCESS, FAILED }`                                 |
+| `domain/Order.java`         | `@Entity @Table(name="orders")` — Lombok @Getter @Setter @NoArgsConstructor     |
+| `domain/Payment.java`       | `@Entity @Table(name="payment")` — orderId는 plain `Long` (naive, FK 관계 없음) |
 
 > **주의:** `@Table(name = "orders")` 필수 — `ORDER`는 SQL 예약어
 
 ### Repository
-| 파일 | 내용 |
-|------|------|
-| `repository/OrderRepository.java` | `Optional<Order> findByOrderNumber(String)` |
-| `repository/PaymentRepository.java` | `long countByOrderId(Long)` |
+
+| 파일                                | 내용                                        |
+| ----------------------------------- | ------------------------------------------- |
+| `repository/OrderRepository.java`   | `Optional<Order> findByOrderNumber(String)` |
+| `repository/PaymentRepository.java` | `long countByOrderId(Long)`                 |
 
 ### Client
-| 파일 | 내용 |
-|------|------|
-| `client/PgApproveRequest.java` | `record PgApproveRequest(String orderId, Long amount)` |
-| `client/PgApproveResponse.java` | `record PgApproveResponse(String paymentKey, String orderId, String status, Long totalAmount)` |
-| `client/PgPaymentException.java` | `RuntimeException` 상속 |
-| `client/PgClient.java` | `@Component`, `RestTemplate` 주입, `@Value("${pg.base-url}")` |
+
+| 파일                             | 내용                                                                                           |
+| -------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `client/PgApproveRequest.java`   | `record PgApproveRequest(String orderId, Long amount)`                                         |
+| `client/PgApproveResponse.java`  | `record PgApproveResponse(String paymentKey, String orderId, String status, Long totalAmount)` |
+| `client/PgPaymentException.java` | `RuntimeException` 상속                                                                        |
+| `client/PgClient.java`           | `@Component`, `RestTemplate` 주입, `@Value("${pg.base-url}")`                                  |
 
 ### Config
-| 파일 | 내용 |
-|------|------|
+
+| 파일                             | 내용                                                               |
+| -------------------------------- | ------------------------------------------------------------------ |
 | `config/RestTemplateConfig.java` | connectTimeout 5s, readTimeout **30s** (10초 지연 관찰 가능하도록) |
 
 ### Service
-| 파일 | 내용 |
-|------|------|
-| `service/PaymentResult.java` | `record PaymentResult(String orderNumber, String status, String paymentKey)` |
-| `service/PaymentService.java` | **핵심 나이브 구현** — 아래 참고 |
+
+| 파일                          | 내용                                                                         |
+| ----------------------------- | ---------------------------------------------------------------------------- |
+| `service/PaymentResult.java`  | `record PaymentResult(String orderNumber, String status, String paymentKey)` |
+| `service/PaymentService.java` | **핵심 나이브 구현** — 아래 참고                                             |
 
 ```java
 // ⚠️ 의도적으로 잘못된 구현 — 두 가지 참사의 원인
@@ -257,10 +242,11 @@ public PaymentResult processPayment(String orderNumber) {
 ```
 
 ### Controller
-| 파일 | 내용 |
-|------|------|
-| `controller/PaymentRequest.java` | `record PaymentRequest(String orderNumber)` |
-| `controller/PaymentController.java` | `POST /api/payments`, Exception catch → 500 FAILED |
+
+| 파일                                       | 내용                                                                  |
+| ------------------------------------------ | --------------------------------------------------------------------- |
+| `controller/PaymentRequest.java`           | `record PaymentRequest(String orderNumber)`                           |
+| `controller/PaymentController.java`        | `POST /api/payments`, Exception catch → 500 FAILED                    |
 | `controller/test/TestResetController.java` | `@Profile("!prod")`, `POST /api/test/reset` — deleteAll + 시드 재생성 |
 
 ---
@@ -268,17 +254,20 @@ public PaymentResult processPayment(String orderNumber) {
 ## 검증 방법
 
 ### 자동 테스트 실행
+
 ```bash
 cd payment
 ./gradlew test
 ```
 
 예상 결과:
+
 - `ConnectionPoolExhaustionTest` — PASS (`failCount > 0`)
 - `DataInconsistencyWithSpyTest` — PASS (PG 호출 확인 + DB 기록 0건)
 - `DataInconsistencyWithFkTest` — PASS (FK 예외 발생 + DB 기록 0건)
 
 ### 수동 부하 테스트 (커넥션 풀 고갈 시각화)
+
 ```bash
 # 1. 인프라 + 모니터링 시작
 docker compose -f docker-compose.app.yml up -d
@@ -295,11 +284,13 @@ docker compose -f docker-compose.monitoring.yml --profile k6 run --rm \
 ```
 
 Grafana에서 확인 (`localhost:3000`):
+
 - `hikaricp_connections_active` → 최대치(10) 도달
 - `hikaricp_connections_pending` → 급등
 - HTTP 5xx 에러율 급등
 
 ### 정합성 검증 쿼리
+
 ```sql
 -- 주문은 READY인데 결제 기록이 있는 비정상 상태 (PG 성공 → DB 롤백)
 SELECT o.order_number, o.status AS order_status, p.status AS payment_status
