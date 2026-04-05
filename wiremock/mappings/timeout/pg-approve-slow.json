@@ -1,0 +1,19 @@
+{
+  "request": {
+    "method": "POST",
+    "url": "/v1/payments/confirm"
+  },
+  "response": {
+    "status": 200,
+    "jsonBody": {
+      "paymentKey": "test-payment-key",
+      "orderId": "${json-unit.any-string}",
+      "status": "DONE",
+      "totalAmount": 1000
+    },
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "fixedDelayMilliseconds": 10000
+  }
+}

@@ -1,3 +1,28 @@
 spring:
   application:
     name: payment
+  datasource:
+    url: jdbc:postgresql://localhost:5432/payment
+    username: user
+    password: password
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 30000
+      minimum-idle: 5
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+
+pg:
+  base-url: http://localhost:8089
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: prometheus,health,metrics
+  prometheus:
+    metrics:
+      export:
+        enabled: true

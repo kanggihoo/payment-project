@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: payment-db
+    environment:
+      POSTGRES_DB: payment
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter
+    container_name: postgres-exporter
+    environment:
+      DATA_SOURCE_NAME: "postgresql://user:password@postgres:5432/payment?sslmode=disable"
+    ports:
+      - "9187:9187"
+    depends_on:
+      - postgres
+
+  wiremock:
+    image: wiremock/wiremock:3.13.2
+    container_name: payment-wiremock
+    ports:
+      - "8089:8080"
+    volumes:
+      - ./wiremock/mappings/${WIREMOCK_SCENARIO:-success}:/home/wiremock/mappings
