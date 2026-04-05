@@ -23,6 +23,7 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'org.wiremock.integrations:wiremock-spring-boot:4.0.5'
 	// implementation 'org.springframework.boot:spring-boot-starter-session-data-redis'
 	// implementation 'org.springframework.boot:spring-boot-starter-session-jdbc'
 
@@ -39,7 +40,8 @@ dependencies {
 	testImplementation 'org.testcontainers:testcontainers-postgresql'
 	// testImplementation 'org.springframework.boot:spring-boot-starter-session-jdbc-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
-	testImplementation "org.wiremock:wiremock:3.13.2"
+	// testImplementation "org.wiremock:wiremock:3.13.2"
+	
 	testCompileOnly 'org.projectlombok:lombok'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 	testAnnotationProcessor 'org.projectlombok:lombok'

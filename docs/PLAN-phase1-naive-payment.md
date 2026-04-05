@@ -14,7 +14,6 @@ Phase 1은 "나이브한 구현의 문제를 증명"이 목적이므로,
 
 - `ConnectionPoolExhaustionTest` → `failCount > 0` 이어야 PASS
 - `DataInconsistencyWithSpyTest` → PG 호출됨 + DB 기록 없음 이어야 PASS
-- `DataInconsistencyWithFkTest` → 예외 발생 + DB 기록 없음 이어야 PASS
 
 ---
 
@@ -152,26 +151,6 @@ management:
   3. paymentService.processPayment() 호출 시 예외 발생
 ```
 
-### 6-3. DataInconsistencyWithFkTest
-
-**파일:** `payment/src/test/java/com/example/payment/DataInconsistencyWithFkTest.java`
-
-```
-시나리오: 존재하지 않는 orderId로 Payment 저장을 시도하면
-         FK 제약 위반으로 DataIntegrityViolationException이 발생하고
-         DB에 아무 기록도 남지 않는다.
-
-설정:
-  - PostgreSQLContainer + WireMockExtension (정상 응답 stub)
-  - Service를 호출하지 않고 PaymentRepository에 직접 corrupt Payment 저장 시도
-    (payment.setOrderId(99999L) — 존재하지 않는 FK)
-
-검증:
-  1. assertThatThrownBy(() -> paymentRepository.saveAndFlush(corruptPayment))
-       .isInstanceOf(DataIntegrityViolationException.class)
-  2. paymentRepository.count() == 0
-```
-
 ---
 
 ## Step 7: TDD Green — 구현 작성
@@ -264,7 +243,6 @@ cd payment
 
 - `ConnectionPoolExhaustionTest` — PASS (`failCount > 0`)
 - `DataInconsistencyWithSpyTest` — PASS (PG 호출 확인 + DB 기록 0건)
-- `DataInconsistencyWithFkTest` — PASS (FK 예외 발생 + DB 기록 0건)
 
 ### 수동 부하 테스트 (커넥션 풀 고갈 시각화)
 
@@ -273,7 +251,8 @@ cd payment
 docker compose -f docker-compose.app.yml up -d
 docker compose -f docker-compose.monitoring.yml up -d
 
-# 2. WireMock slow 모드 활성화 (pg-approve-success.json 제거 or 파일 교체)
+# 2. WireMock slow 모드 활성화 (기본값: success)
+WIREMOCK_SCENARIO=timeout docker compose -f docker-compose.app.yml up -d wiremock
 
 # 3. Spring Boot 실행
 ./gradlew bootRun
