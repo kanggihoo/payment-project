@@ -10,31 +10,54 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
-import lombok.Setter;
 
 import java.time.OffsetDateTime;
 
 @Entity
-@Table(name = "orders") 
+@Table(name = "orders")
 @Getter
-@Setter
 @NoArgsConstructor
 public class Order {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id; // 내부 식별자 (PK)
+    private Long id;
 
     @Column(nullable = false, unique = true)
-    private String orderNumber; // 외부로 노출되는 주문 번호 (예: ORD-12345)
+    private String orderNumber;
 
     @Column(nullable = false)
-    private Long amount; // 주문 총 금액
+    private Long amount;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private OrderStatus status; // 주문 상태 (CREATED, COMPLETED 등)
+    private OrderStatus status;
 
     @Column(name = "created_at")
-    private OffsetDateTime createdAt; // 주문 생성 일시
+    private OffsetDateTime createdAt;
+
+    public Order(String orderNumber, Long amount) {
+        this.orderNumber = orderNumber;
+        this.amount = amount;
+        this.status = OrderStatus.READY;
+        this.createdAt = OffsetDateTime.now();
+    }
+
+    // TX1 사전 커밋: READY → PENDING 전환 후 DB 커넥션 반납
+    public void pending() {
+        if (this.status != OrderStatus.READY) {
+            throw new IllegalStateException("READY 상태에서만 PENDING으로 전환할 수 있습니다. 현재 상태: " + this.status);
+        }
+        this.status = OrderStatus.PENDING;
+    }
+
+    // TX2 완료: PENDING → SUCCESS 전환
+    public void success() {
+        this.status = OrderStatus.SUCCESS;
+    }
+
+    // TX2 실패: PENDING → FAILED 전환
+    public void fail() {
+        this.status = OrderStatus.FAILED;
+    }
 }

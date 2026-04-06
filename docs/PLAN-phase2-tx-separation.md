@@ -157,6 +157,7 @@ TX2: 결과에 따라 SUCCESS / FAILED / UNKNOWN 기록
 - `ConnectionPoolExhaustionTest`, `DataInconsistencyWithSpyTest`를 `phase1/` 하위 패키지로 이동
 - `@Tag("phase1")` 어노테이션 추가 → 평상시 `./gradlew test`에서 제외 가능
 - 이유: Phase 2 코드로 변경 후 이 테스트들의 검증 조건이 깨지므로, Phase 1 증거로 보존하되 Phase 2 테스트 실행과 분리
+  => Phase1 브랜치에 해당 내용 있으니 Phase 1에서 사용한 테스트 코드는 삭제
 
 **테스트 작성 (신규):**
 

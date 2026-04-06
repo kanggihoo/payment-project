@@ -2,16 +2,26 @@ package com.example.payment.service;
 
 import com.example.payment.client.PgApproveResponse;
 import com.example.payment.client.PgClient;
-import com.example.payment.domain.Order;
-import com.example.payment.domain.OrderStatus;
-import com.example.payment.domain.Payment;
-import com.example.payment.domain.PaymentStatus;
+import com.example.payment.client.PgPaymentException;
 import com.example.payment.repository.OrderRepository;
 import com.example.payment.repository.PaymentRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * 결제 오케스트레이터.
+ *
+ * Phase 2 TX 분리 구조:
+ * TX1(사전 커밋) → PG 호출(트랜잭션 밖) → TX2(결과 기록)
+ *
+ * Phase 1 문제 해결:
+ * 1. 커넥션 풀 고갈 — TX1 커밋 후 커넥션 반납 → PG 호출 시간 동안 커넥션 미점유
+ * 2. 데이터 불일치 — TX1에서 Payment(PENDING)를 먼저 저장하므로 PG 성공 후 DB 실패해도 PENDING 기록이 남음
+ *
+ * 클래스 레벨 @Transactional 제거:
+ * TX1/TX2는 PaymentInternalService(별도 빈)에서 각각 독립 트랜잭션으로 실행된다.
+ * 이 클래스에 @Transactional이 있으면 외부 트랜잭션에 TX1/TX2가 합류되어 분리 효과가 사라진다.
+ */
 @Service
 @RequiredArgsConstructor
 public class PaymentService {
@@ -19,50 +29,65 @@ public class PaymentService {
     private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
     private final PgClient pgClient;
+    private final PaymentInternalService paymentInternalService;
 
     /**
-     * [참사 1단계: 나이브한 결제 처리]
-     * 이 메서드는 외부 API 호출을 @Transactional 애플리케이션 서비스 안에 넣었을 때 
-     * 발생할 수 있는 치명적인 문제들을 시뮬레이션하기 위해 작성되었습니다.
-     * 
-     
+     * 결제 처리 오케스트레이션.
+     *
+     * TX1: Order=PENDING, Payment=PENDING 사전 커밋 → DB 커넥션 반납
+     * PG:  트랜잭션 밖에서 PG 승인 요청
+     * TX2: PG 결과에 따라 SUCCESS / FAILED / UNKNOWN 기록
      */
-    @Transactional
     public PaymentResult processPayment(String orderNumber) {
-        // 1. 주문 데이터 조회
-        Order order = orderRepository.findByOrderNumber(orderNumber)
+        var order = orderRepository.findByOrderNumber(orderNumber)
                 .orElseThrow(() -> new IllegalArgumentException("주문을 찾을 수 없습니다: " + orderNumber));
 
-        /**
-         * ⚠️ 치명적 문제 1: DB 트랜잭션 안에서 외부 HTTP(PG사) 호출
-         * 
-         * [참사 시나리오: 커넥션 풀 고갈]
-         * 1. @Transactional이 시작되면서 DB 커넥션 풀(HikariCP)에서 커넥션을 하나 점유합니다.
-         * 2. pgClient.approve()가 호출되어 외부 서버의 응답을 기다립니다.
-         * 3. 만약 PG사가 응답에 10초가 걸린다면, 이 커넥션은 10초 동안 아무것도 안 하고 묶여있게 됩니다.
-         * 4. 동시 요청이 많아지면 모든 커넥션이 외부 응답을 기다리느라 고갈되어, 
-         *    결국 시스템 전체(로그인, 단순 조회 등)가 마비되는 현상이 발생
-         */
-        PgApproveResponse pgResponse = pgClient.approve(order.getOrderNumber(), order.getAmount());
+        // TX1: 사전 커밋 — 이 시점부터 DB 커넥션 반납됨
+        Long paymentId = paymentInternalService.preparePayment(order.getId(), order.getAmount());
 
-        /**
-         * ⚠️ 치명적 문제 2: 결제 승인 완료 후 DB 저장 시점의 롤백 위험
-         * 
-         * [참사 시나리오: 데이터 불일치/돈만 빠져나감]
-         * 1. 위에서 pgClient.approve()는 이미 성공하여 고객의 돈은 빠져나간 상태입니다.
-         * 2. 아래의 paymentRepository.save()나 order.setStatus() 과정에서 에러가 발생하면?
-         * 3. @Transactional에 의해 DB는 롤백되지만, 이미 성공한 외부 결제(PG)는 취소되지 않습니다.
-         * 4. 결과: 고객은 돈을 지불했지만, 우리 서버에는 결제 기록이 없는 '데이터 부정합' 상태가 됩니다.
-         */
-        Payment payment = new Payment();
-        payment.setOrderId(order.getId());
-        payment.setAmount(order.getAmount());
-        payment.setPgPaymentKey(pgResponse.paymentKey());
-        payment.setStatus(PaymentStatus.SUCCESS);
-        paymentRepository.save(payment);
+        // PG 호출 — 트랜잭션 밖, DB 커넥션 미점유
+        try {
+            PgApproveResponse pgResponse = pgClient.approve(orderNumber, order.getAmount());
 
-        order.setStatus(OrderStatus.SUCCESS);
-        
-        return new PaymentResult(order.getOrderNumber(), "SUCCESS", pgResponse.paymentKey());
+            // TX2: 성공 기록
+            paymentInternalService.recordSuccess(paymentId, pgResponse.paymentKey());
+            return new PaymentResult(orderNumber, "SUCCESS", pgResponse.paymentKey());
+
+        } catch (PgPaymentException e) {
+            if (isNetworkError(e)) {
+                // TX2: 타임아웃 — 승인 여부 불명, 복구 스케줄러가 처리
+                paymentInternalService.recordUnknown(paymentId);
+                return new PaymentResult(orderNumber, "UNKNOWN", null);
+            }
+            // TX2: PG 명시적 거절(4xx)
+            paymentInternalService.recordFailure(paymentId);
+            return new PaymentResult(orderNumber, "FAILED", null);
+        }
+    }
+
+    /**
+     * 결제 상태 조회.
+     *
+     * UNKNOWN 상태에서 클라이언트가 폴링으로 최종 상태를 확인할 때 사용한다.
+     * findByOrderIdOrderByIdDesc로 DB 레벨 직접 조회 — findAll() 후 스트림 필터 방식 금지.
+     */
+    public PaymentStatusResponse getPaymentStatus(String orderNumber) {
+        var order = orderRepository.findByOrderNumber(orderNumber)
+                .orElseThrow(() -> new IllegalArgumentException("주문을 찾을 수 없습니다: " + orderNumber));
+
+        var payments = paymentRepository.findByOrderIdOrderByIdDesc(order.getId());
+        var latestPayment = payments.isEmpty() ? null : payments.get(0);
+
+        return new PaymentStatusResponse(
+                orderNumber,
+                order.getStatus(),
+                latestPayment != null ? latestPayment.getStatus() : null,
+                latestPayment != null ? latestPayment.getPgPaymentKey() : null
+        );
+    }
+
+    // PgClient에서 HTTP 오류(4xx/5xx)는 "PG 승인 API 에러:", 네트워크 오류는 "PG 승인 요청 실패:"로 구분된다.
+    private boolean isNetworkError(PgPaymentException e) {
+        return e.getMessage() != null && e.getMessage().startsWith("PG 승인 요청 실패");
     }
 }
