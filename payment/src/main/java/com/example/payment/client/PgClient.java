@@ -49,7 +49,12 @@ public class PgClient {
                         throw new PgPaymentException("PG 승인 API 에러: " + res.getStatusCode());
                     })
                     .body(PgApproveResponse.class);
+        } catch (PgPaymentException e) {
+            // onStatus 핸들러에서 던진 PgPaymentException은 그대로 재던짐
+            // → PaymentService.isNetworkError()가 "PG 승인 API 에러:"로 4xx를 정확히 구분할 수 있도록 보존
+            throw e;
         } catch (Exception e) {
+            // 네트워크 단절, 타임아웃 등 실제 네트워크 에러
             throw new PgPaymentException("PG 승인 요청 실패: " + e.getMessage(), e);
         }
     }
